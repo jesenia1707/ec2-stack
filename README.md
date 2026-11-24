@@ -6,7 +6,7 @@ Sistema basado en microservicios desplegado en **una única instancia EC2 de AWS
 
 | Servicio                 | Puerto | Tecnología                        | Estado actual                  |
 | ------------------------ | ------ | --------------------------------- | ------------------------------ |
-| api                      | 8080   | Java 21 + Spring Boot 4 (Gradle)  | Solo `GET /health`             |
+| api (BFF Coffee Flower) | 8080   | Java 21 + Spring Boot 3.4.4 (Gradle) | BFF + productor Kafka: `/health`, `/topic-test`, `/api/*` |
 | consumer-analiticas      | 8081   | Node.js 22 + Express              | Solo `GET /health`             |
 | consumer-notificaciones  | 8082   | Node.js 22 + Express              | Solo `GET /health`             |
 | consumer-pagos           | 8083   | Node.js 22 + Express              | Solo `GET /health`             |
@@ -20,8 +20,10 @@ Sistema basado en microservicios desplegado en **una única instancia EC2 de AWS
 ```
 proyectoFinal/
 ├── README.md
-├── docker-compose.yml        # stack completo: 4 servicios + kafka + kafka-ui
-├── .gitignore                # ignora *.pem, node_modules, build, .gradle
+├── docker-compose.yml        # stack completo: api(BFF) + 3 consumers + kafka + kafka-ui
+├── .env.example              # plantilla de secretos del BFF (copiar a .env en el EC2)
+├── .env                      # SOLO en el EC2: DB, SNS, mail, gateway (NUNCA commitear)
+├── .gitignore                # ignora *.pem, .env, node_modules, build, .gradle
 ├── mi-llave-privada.pem      # llave SSH del EC2 (NUNCA commitear)
 ├── scripts/
 │   ├── config.sh             # EDITAR: IP/DNS del EC2, usuario, región, SG
@@ -35,7 +37,7 @@ proyectoFinal/
 │   ├── verify.ps1            # versión Windows de verify.sh
 │   └── security-group.ps1    # versión Windows de security-group.sh
 └── services/
-    ├── api/                  # Spring Boot (Dockerfile multi-stage)
+    ├── api/                  # BFF Coffee Flower + productor Kafka (Dockerfile multi-stage)
     ├── consumer-analiticas/  # Node + Express (server.js + Dockerfile)
     ├── consumer-notificaciones/
     └── consumer-pagos/
@@ -47,7 +49,7 @@ Cada servicio usa la **imagen oficial más pequeña que sigue siendo funcional y
 
 | Servicio             | Imagen base (build)               | Imagen base (runtime)         | Imagen final medida |
 | -------------------- | --------------------------------- | ----------------------------- | ------------------- |
-| api                  | `eclipse-temurin:21-jdk-alpine`   | `eclipse-temurin:21-jre-alpine` | 324 MB |
+| api (BFF)            | `eclipse-temurin:21-jdk-alpine`   | `eclipse-temurin:21-jre-alpine` | — |
 | consumer-analiticas  | `node:22-alpine` (mismo)          | `node:22-alpine`              | 243 MB |
 | consumer-notificaciones | `node:22-alpine` (mismo)       | `node:22-alpine`              | 243 MB |
 | consumer-pagos       | `node:22-alpine` (mismo)          | `node:22-alpine`              | 243 MB |
@@ -56,7 +58,7 @@ Cada servicio usa la **imagen oficial más pequeña que sigue siendo funcional y
 
 Decisiones:
 
-- **api**: multi-stage — el JDK alpine solo existe en la etapa de build (descartada); el runtime lleva solo el JRE alpine. Las variantes `-alpine` de Temurin existen para amd64 y arm64 (cualquier tipo de EC2). `npm cache clean` / capas ordenadas para aprovechar cache de Docker.
+- **api (BFF)**: multi-stage — el JDK alpine solo existe en la etapa de build (descartada); el runtime lleva solo el JRE alpine. El código completo (pedidos, productos, informes SNS y el productor Kafka) vive en `services/api/`, al mismo nivel que los consumers, y se buildea en el EC2 sin registry. Las variantes `-alpine` de Temurin existen para amd64 y arm64.
 - **consumers**: `node:22-alpine` es la imagen oficial de Node más pequeña con npm funcional; se corre con usuario no-root (`USER node`).
 - Verificado en Mac ARM64 y portable a EC2 amd64 (t2/t3) o arm64 (t4g).
 
@@ -75,7 +77,7 @@ Si se quisiera reducir aún más (no necesario por ahora):
 
 ### Objetivo
 
-La **api** (productor) publica eventos en Kafka y los **3 consumers** los procesan, cada uno con su **propio consumer group**.
+La **api**, que ahora es el BFF `back-coffe-flower` (productor), publica eventos en Kafka y los **3 consumers** los procesan, cada uno con su **propio consumer group**.
 
 ### Tópico
 
@@ -83,9 +85,10 @@ La **api** (productor) publica eventos en Kafka y los **3 consumers** los proces
 - Particiones: 1 (broker único)
 - Creación: automática al primer mensaje (el broker ya tiene `KAFKA_AUTO_CREATE_TOPICS_ENABLE=true` en `docker-compose.yml`)
 
-### Productor — api (Spring Boot)
+### Productor — api = back-coffe-flower (Spring Boot 3.4.4)
 
-- Dependencia: `spring-kafka` (versión administrada por el BOM de Spring Boot).
+- Dependencia: `spring-kafka` (versión administrada por el BOM de Spring Boot 3.4.4).
+- Código: `com.coffeeflower.bff.service.KafkaPagosService` + `controller/TopicTestController`.
 - Conexión: `KAFKA_BOOTSTRAP_SERVERS=kafka:9092` (ya definida en `docker-compose.yml`).
 - Endpoint de prueba: `GET /topic-test?msj=test`
   - Produce el mensaje al tópico `pagos` y responde confirmación con tópico/partición/offset.
@@ -114,7 +117,7 @@ La **api** (productor) publica eventos en Kafka y los **3 consumers** los proces
 
 ### Notas de implementación
 
-- Spring Boot 4 (a diferencia de Boot 3) sí tiene starter: `spring-boot-starter-kafka` (módulo de autoconfiguración `spring-boot-kafka` + `spring-kafka` 4.1.2, administrado por el BOM).
+- Spring Boot 3.4.4 usa la dependencia `org.springframework.kafka:spring-kafka` (administrada por el BOM) y el `ObjectMapper` lo autoconfigura `spring-boot-starter-web`, así que no hace falta el `JacksonConfig` que tenía el viejo api Boot 4. El `origen` del mensaje sigue siendo `api` por defecto (`KAFKA_ORIGEN`) para mantener el contrato con los consumers.
 - Consumidores Node: `kafkajs`, con reconexión automática (kafka puede tardar unos segundos en estar listo tras `compose up`).
 - Variables nuevas en `docker-compose.yml` por consumer: `KAFKA_GROUP_ID` y `KAFKA_TOPIC` (+ `depends_on: kafka`).
 - Script de prueba del flujo completo: `scripts/topic-test.sh` (bash) y `scripts/topic-test.ps1` (Windows) — publica vía `/topic-test` y verifica la recepción en los logs de los 3 consumers.
@@ -130,8 +133,8 @@ La **api** (productor) publica eventos en Kafka y los **3 consumers** los proces
    ./scripts/deploy.sh           # limpia stack viejo + despliega el nuevo
    ./scripts/verify.sh           # verifica desde afuera, contra la IP pública
    ```
-- `deploy.sh` usa `rsync` + `docker compose up -d --build` (build en el propio EC2, sin registry).
-- La primera build de la api demora varios minutos (descarga Gradle + dependencias Maven dentro del contenedor).
+- **Antes de desplegar**, crear el `.env` del EC2: `ssh ... 'cd ~/proyectoFinal && cp .env.example .env'` y completar `DB_URL`, `DB_USER`, `DB_PASSWORD`, `GATEWAY_SECRET`, `SNS_TOPIC_ARN`/`AWS_SNS_TOPIC_ARN` y `MAIL_PASSWORD`. El deploy crea la plantilla y se detiene con un aviso si aún no existe; los scripts conservan el `.env` entre despliegues (rsync/tar lo excluyen).
+- `deploy.sh` usa `rsync` + `docker compose up -d --build` (build en el propio EC2, sin registry). La primera build de la api (Gradle + dependencias Maven) demora varios minutos.
 - En instancias con poca RAM el deploy crea un swap de 2G para que el build de Gradle no muera por OOM.
 
 ### Windows (PowerShell)
@@ -146,7 +149,7 @@ Equivalentes 1:1 en `.ps1` (probados contra el EC2 real):
 
 - También existe `.\scripts\cleanup.ps1` (equivale a `cleanup.sh`) y `.\scripts\config.ps1` (equivale a `config.sh`).
 - `deploy.ps1` acepta `-SkipCleanup` para omitir la limpieza (re-deploy rápido).
-- En vez de `rsync` (no existe en Windows) empaqueta el proyecto con `tar` (incluido en Windows 10 1803+) y lo sube con `scp`.
+- En vez de `rsync` (no existe en Windows) empaqueta el proyecto con `tar` (incluido en Windows 10 1803+) y lo sube con `scp`. El `.env` del EC2 se guarda antes de reemplazar la carpeta y se restaura después (y se excluye del tar), así que los secretos sobreviven a cada deploy.
 - Requisitos Windows 10/11: **Cliente OpenSSH** (Configuración > Aplicaciones > Características opcionales) y **AWS CLI v2** para `security-group.ps1`. `verify.ps1` usa `curl.exe` (incluido) con fallback nativo a `Invoke-WebRequest`.
 - Compatibles con Windows PowerShell 5.1 y pwsh 7+.
 - Si ssh rechaza la llave (`UNPROTECTED PRIVATE KEY`), restringir su ACL:
@@ -223,6 +226,14 @@ Historial de la migración:
 4. Stack levantado con `docker compose up -d --build` y health checks OK (internos y desde afuera).
 5. Security Group `sg-0dac330c25b8c2240`: 22 solo a la IP de origen + 8080-8084 públicos; kafka 9092 interno.
 6. Versiones Windows (`.ps1`) probadas contra el mismo EC2: `verify.ps1` OK contra los 5 endpoints y `deploy.ps1 -SkipCleanup` completó el ciclo completo (ssh + tar/scp + compose + health checks OK).
+
+## Migración del BFF a `services/api` (24-nov-2026)
+
+- Todo el código del ex repo `back-coffe-flower` quedó dentro de **`services/api/`**, al mismo nivel que los 3 consumers (que siguen siendo solo consumers). El compose vuelve a buildearlo en el EC2 con `Dockerfile` multi-stage; **no se usa GHCR**. El repo `back-coffe-flower` se podrá eliminar cuando ya no se necesite.
+- Productor Kafka integrado en el BFF: `com.coffeeflower.bff.service.KafkaPagosService` + `controller/TopicTestController` (`GET /topic-test`) y `controller/HealthController` (`GET /health`). Misma respuesta y mismo payload JSON (`origen=api` por defecto), así que `topic-test.sh` / `.ps1` y los 3 consumers siguen funcionando sin cambios.
+- `env_file: .env` en el servicio `api`. Plantilla en `.env.example`: `DB_URL`/`DB_USER`/`DB_PASSWORD`, `GATEWAY_SECRET`, SNS, `AWS_REGION`, mail y `KAFKA_TOPIC`/`KAFKA_ORIGEN`. La contraseña de mail salió de `application.properties`; los scripts de deploy conservan el `.env` del EC2 entre despliegues.
+- Sin cambio de puertos: api 8080, consumers 8081-8083, kafka-ui 8084, kafka 9092 interno (no hace falta tocar el Security Group).
+- Checklist en el EC2: (1) crear/actualizar `~/proyectoFinal/.env` desde `.env.example`, (2) `./scripts/deploy.sh` (o `.\scripts\deploy.ps1`), (3) `./scripts/verify.sh`, (4) `./scripts/topic-test.sh` y confirmar recepción en los 3 consumers.
 
 ## Notas de verificación local (10-nov-2026)
 

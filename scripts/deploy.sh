@@ -117,7 +117,7 @@ sudo docker buildx version
 sudo docker --version
 sudo docker compose version
 
-# swap de emergencia: el build de Gradle (api) necesita ~2GB
+# swap de emergencia: el build de Gradle (api) y los builds Node necesitan ~2GB
 total_mb=$(free -m | awk '/^Mem:/{print $2}')
 swap_mb=$(free -m | awk '/^Swap:/{print $2}')
 if [ "${total_mb:-0}" -lt 2000 ] && [ "${swap_mb:-0}" -lt 1000 ] && [ ! -f /swapfile ]; then
@@ -138,6 +138,7 @@ rsync -az --delete \
   --exclude 'build/' \
   --exclude '.git/' \
   --exclude '*.pem' \
+  --exclude '.env' \
   --exclude '.DS_Store' \
   -e "ssh -i ${KEY_PATH} -o StrictHostKeyChecking=accept-new" \
   "${PROJECT_ROOT}/" "${EC2_USER}@${EC2_HOST}:${REMOTE_DIR}/"
@@ -145,10 +146,17 @@ echo "   OK"
 
 # ------------------------------------------------------------------ 5. build + up
 echo "-- Levantando stack (docker compose up -d --build) --"
-echo "   (la primera build de la api descarta Gradle y demora varios minutos)"
+echo "   (la primera build de la api descarga Gradle y dependencias: demora varios minutos)"
 "${SSH_BASE[@]}" bash -s -- "$REMOTE_DIR" <<'REMOTE'
 set -euo pipefail
 cd "$HOME/$1"
+# .env vive solo en el EC2: rsync no lo borra ni lo sobrescribe (--exclude '.env')
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "ERROR: no existia .env en el EC2; se creo desde .env.example." >&2
+  echo "Completá $PWD/.env (DB_URL, DB_USER, DB_PASSWORD, GATEWAY_SECRET, ARN de SNS y mail) y volvé a correr deploy." >&2
+  exit 1
+fi
 sudo docker compose up -d --build
 REMOTE
 
@@ -172,7 +180,7 @@ check() {
   return 1
 }
 
-# la api demora más la primera vez (build de Gradle + arranque de Spring)
+# el BFF puede demorar al arrancar (JPA + conexion a PostgreSQL)
 check api                  http://localhost:8080/health 60
 check consumer-analiticas  http://localhost:8081/health 20
 check consumer-notificaciones http://localhost:8082/health 20

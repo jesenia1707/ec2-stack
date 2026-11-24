@@ -7,18 +7,26 @@
 name: proyecto-final
 
 services:
-  # ---------------------------------------------------- api (Spring Boot, Java 21)
+  # ---------------------------------------------------- api = BFF Coffee Flower + productor Kafka (Spring Boot 3.4.4, Java 21)
+  # Codigo completo dentro de services/api (junto a los consumers, que son solo
+  # consumidores). DB_URL/DB_USER/DB_PASSWORD/GATEWAY_SECRET/SNS/mail se leen de
+  # .env en el EC2 (copiar .env.example a .env y completar; .env esta ignorado).
   api:
     build:
       context: ./services/api
     image: proyecto-final/api:latest
     container_name: api
     restart: unless-stopped
+    depends_on:
+      - kafka
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
       # Productor kafka: publica en el topico "pagos" (endpoint /topic-test)
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PORT: 8080
 
   # ---------------------------------------------------- consumers (Node + Express)
   # Cada uno consume el topico "pagos" con su PROPIO grupo (fan-out: reciben todos

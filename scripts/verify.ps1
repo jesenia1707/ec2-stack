@@ -31,7 +31,7 @@ function Get-Http {
 }
 
 $checks = @(
-    @{ Name = "api";                  Url = "http://${EC2_HOST}:8080/health" },
+    @{ Name = "api (BFF Coffee Flower)"; Url = "http://${EC2_HOST}:8080/health" },
     @{ Name = "consumer-analiticas";  Url = "http://${EC2_HOST}:8081/health" },
     @{ Name = "consumer-notificaciones"; Url = "http://${EC2_HOST}:8082/health" },
     @{ Name = "consumer-pagos";       Url = "http://${EC2_HOST}:8083/health" },

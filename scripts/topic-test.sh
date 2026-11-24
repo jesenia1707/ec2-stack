@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================
 # Prueba end-to-end del flujo kafka:
-#   1. Publica un mensaje via el endpoint de la api: /topic-test?msj=<MSJ>
+#   1. Publica un mensaje via el BFF (servicio api): /topic-test?msj=<MSJ>
 #   2. Espera unos segundos a que los consumers lo procesen
 #   3. Verifica en los LOGS de los 3 consumers que cada grupo recibio el mensaje
 #
@@ -29,12 +29,12 @@ MSJ="${1:-test}"
 echo "== Prueba del flujo kafka: /topic-test?msj=${MSJ} =="
 
 # ------------------------------------------------------------------ 1. publicar
-echo "-- 1. Publicando via la api --"
+echo "-- 1. Publicando via el BFF (servicio api) --"
 RESPONSE=$(curl -fsS -m 15 "http://${EC2_HOST}:8080/topic-test?msj=${MSJ}") || {
-  echo "ERROR: la api no respondio en http://${EC2_HOST}:8080/topic-test" >&2
+  echo "ERROR: el BFF no respondio en http://${EC2_HOST}:8080/topic-test" >&2
   exit 1
 }
-echo "   respuesta de la api: $RESPONSE"
+echo "   respuesta del BFF: $RESPONSE"
 
 # ------------------------------------------------------------------ 2. esperar proceso
 echo "-- 2. Esperando 6s a que los 3 grupos procesen el mensaje --"

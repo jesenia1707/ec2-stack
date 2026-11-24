@@ -32,7 +32,7 @@ check() {
 
 echo "== Verificación contra http://${EC2_HOST} =="
 
-check "api"                 "http://${EC2_HOST}:8080/health"
+check "api (BFF Coffee Flower)" "http://${EC2_HOST}:8080/health"
 check "consumer-analiticas" "http://${EC2_HOST}:8081/health"
 check "consumer-notificaciones" "http://${EC2_HOST}:8082/health"
 check "consumer-pagos"      "http://${EC2_HOST}:8083/health"

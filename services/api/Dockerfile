@@ -1,14 +1,10 @@
 # syntax=docker/dockerfile:1
 # =====================================================================
-# Imagen mínima funcional de la api (Spring Boot, Java 21).
+# BFF Coffee Flower + productor Kafka (Spring Boot 3.4.4, Java 21).
+# Se buildea en el propio EC2, igual que los consumers del stack.
 #
-#   build   -> eclipse-temurin:21-jdk-alpine  (~190MB, capa descartada)
-#   runtime -> eclipse-temurin:21-jre-alpine  (~95MB, solo JRE)
-#
-# Las variantes -alpine de Eclipse Temurin son las imágenes oficiales
-# más livianas que siguen siendo un JDK/JRE completo, y existen tanto
-# para amd64 (t2/t3) como arm64 (t4g), igual que el EC2 donde se buildea.
-# Opciones aún más pequeñas (jlink con módulos a medida) ver README.
+#   build   -> eclipse-temurin:21-jdk-alpine (~190MB, capa descartada)
+#   runtime -> eclipse-temurin:21-jre-alpine (~95MB, solo JRE)
 # =====================================================================
 
 # ---------------------------------------------------- build (JDK completo)

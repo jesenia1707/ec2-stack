@@ -105,7 +105,7 @@ sudo docker buildx version
 sudo docker --version
 sudo docker compose version
 
-# swap de emergencia: el build de Gradle (api) necesita ~2GB
+# swap de emergencia: el build de Gradle (api) y los builds Node necesitan ~2GB
 total_mb=$(free -m | awk '/^Mem:/{print $2}')
 swap_mb=$(free -m | awk '/^Swap:/{print $2}')
 if [ "${total_mb:-0}" -lt 2000 ] && [ "${swap_mb:-0}" -lt 1000 ] && [ ! -f /swapfile ]; then
@@ -137,6 +137,7 @@ if (Test-Path $tarFile) { Remove-Item $tarFile -Force }
     --exclude build `
     --exclude .git `
     --exclude "*.pem" `
+    --exclude .env `
     --exclude .DS_Store `
     .
 if ($LASTEXITCODE -ne 0) { throw "tar fallo al empaquetar el proyecto" }
@@ -149,23 +150,38 @@ $extract = @'
 set -euo pipefail
 REMOTE_DIR="$1"
 [ -n "$REMOTE_DIR" ] || { echo "ERROR: REMOTE_DIR vacio" >&2; exit 1; }
+# El .env con los secretos vive solo en el EC2: se conserva entre despliegues.
+ENV_TMP="$(mktemp)"
+if [ -f "$HOME/$REMOTE_DIR/.env" ]; then
+  cp "$HOME/$REMOTE_DIR/.env" "$ENV_TMP"
+fi
 cd "$HOME"
 rm -rf "$REMOTE_DIR"
 mkdir "$REMOTE_DIR"
 tar -xzf proyectoFinal-deploy.tar.gz -C "$REMOTE_DIR"
 rm -f proyectoFinal-deploy.tar.gz
 rm -f "$REMOTE_DIR"/*.pem 2>/dev/null || true   # doble seguridad: nunca dejar la llave en el EC2
+if [ -s "$ENV_TMP" ]; then
+  cp "$ENV_TMP" "$HOME/$REMOTE_DIR/.env"
+fi
+rm -f "$ENV_TMP"
 echo "   proyecto extraido en ~/$REMOTE_DIR"
 '@
 Invoke-Remote -ScriptBody $extract -ScriptArgs @($REMOTE_DIR)
 
 # ------------------------------------------------------------------ 5. build + up
 Write-Host "-- Levantando stack (docker compose up -d --build) --"
-Write-Host "   (la primera build de la api descarga Gradle y demora varios minutos)"
+Write-Host "   (la primera build de la api descarga Gradle y dependencias: demora varios minutos)"
 $composeUp = @'
 set -euo pipefail
 REMOTE_DIR="$1"
 cd "$HOME/$REMOTE_DIR"
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "ERROR: no existia .env en el EC2; se creo desde .env.example." >&2
+  echo "Completá $PWD/.env (DB_URL, DB_USER, DB_PASSWORD, GATEWAY_SECRET, ARN de SNS y mail) y volvé a correr deploy." >&2
+  exit 1
+fi
 sudo docker compose up -d --build
 '@
 Invoke-Remote -ScriptBody $composeUp -ScriptArgs @($REMOTE_DIR)
@@ -190,7 +206,7 @@ check() {
   return 1
 }
 
-# la api demora mas la primera vez (build de Gradle + arranque de Spring)
+# el BFF puede demorar al arrancar (JPA + conexion a PostgreSQL)
 check api                  http://localhost:8080/health 60
 check consumer-analiticas  http://localhost:8081/health 20
 check consumer-notificaciones http://localhost:8082/health 20
