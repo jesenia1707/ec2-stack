@@ -22,20 +22,24 @@ import java.util.Map;
 @Service
 public class PedidoService {
 
-    private static final Logger log = LoggerFactory.getLogger(PedidoService.class);
+    private static final Logger log =
+            LoggerFactory.getLogger(PedidoService.class);
 
     private final PedidoRepository pedidoRepository;
     private final PedidoItemRepository pedidoItemRepository;
     private final PedidoSnsService pedidoSnsService;
+    private final KafkaPagosService kafkaPagosService;
 
     public PedidoService(
             PedidoRepository pedidoRepository,
             PedidoItemRepository pedidoItemRepository,
-            PedidoSnsService pedidoSnsService) {
+            PedidoSnsService pedidoSnsService,
+            KafkaPagosService kafkaPagosService) {
 
         this.pedidoRepository = pedidoRepository;
         this.pedidoItemRepository = pedidoItemRepository;
         this.pedidoSnsService = pedidoSnsService;
+        this.kafkaPagosService = kafkaPagosService;
     }
 
     @Transactional
@@ -64,7 +68,8 @@ public class PedidoService {
         pedido.setTotal(total);
         pedido.setEstado("RECIBIDO");
 
-        PedidoEntity guardado = pedidoRepository.saveAndFlush(pedido);
+        PedidoEntity guardado =
+                pedidoRepository.saveAndFlush(pedido);
 
         for (PedidoItemEntity item : items) {
             if (item == null) {
@@ -75,12 +80,14 @@ public class PedidoService {
             item.setPedido(guardado);
         }
 
-        List<PedidoItemEntity> itemsGuardados = pedidoItemRepository.saveAll(items);
+        List<PedidoItemEntity> itemsGuardados =
+                pedidoItemRepository.saveAll(items);
 
         pedidoItemRepository.flush();
 
-        // Construir el evento mientras los datos están disponibles.
+        // Construir el evento con los datos reales de la compra.
         Map<String, Object> eventoPedido = new LinkedHashMap<>();
+
         eventoPedido.put("id", guardado.getId());
         eventoPedido.put("cliente", guardado.getCliente());
         eventoPedido.put("total", guardado.getTotal());
@@ -89,21 +96,29 @@ public class PedidoService {
 
         List<Map<String, Object>> productos = itemsGuardados.stream()
                 .map(item -> {
-                    Map<String, Object> producto = new LinkedHashMap<>();
+                    Map<String, Object> producto =
+                            new LinkedHashMap<>();
+
                     producto.put("productoId", item.getProductoId());
                     producto.put("nombre", item.getNombre());
                     producto.put("cantidad", item.getCantidad());
                     producto.put("precio", item.getPrecio());
+
                     return producto;
                 })
                 .toList();
 
         eventoPedido.put("items", productos);
 
+        // Publicar los eventos solamente después de confirmar
+        // correctamente la transacción de la compra.
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
+
                     @Override
                     public void afterCommit() {
+
+                        // Publicación en AWS SNS.
                         try {
                             pedidoSnsService.publicarPedido(eventoPedido);
 
@@ -115,6 +130,22 @@ public class PedidoService {
                         } catch (Exception e) {
                             log.error(
                                     "El pedido {} se guardó, pero falló la publicación en SNS",
+                                    guardado.getId(),
+                                    e);
+                        }
+
+                        // Publicación en Apache Kafka.
+                        try {
+                            kafkaPagosService.publicarPedido(eventoPedido);
+
+                            log.info(
+                                    "Compra {} publicada en Kafka con {} productos",
+                                    guardado.getId(),
+                                    productos.size());
+
+                        } catch (Exception e) {
+                            log.error(
+                                    "El pedido {} se guardó, pero falló la publicación en Kafka",
                                     guardado.getId(),
                                     e);
                         }
